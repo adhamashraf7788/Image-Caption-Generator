@@ -1,0 +1,11 @@
+data/raw/
+data/features/
+data/dummy/
+__pycache__/
+*.pyc
+.git/
+.pytest_cache/
+venv/
+notebooks/
+tests/
+*.log

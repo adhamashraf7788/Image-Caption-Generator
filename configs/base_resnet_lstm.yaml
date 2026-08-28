@@ -1,0 +1,48 @@
+# Baseline architecture: ResNet50 (frozen) -> Linear projection -> LSTM decoder
+# Any key omitted here falls back to DEFAULT_CONFIG in src/utils/config.py
+run_name: base_resnet_lstm
+
+seed: 42
+
+paths:
+  raw_images_dir: data/raw/images
+  captions_file: data/raw/captions.txt
+  processed_dir: data/processed
+  features_dir: data/features
+  models_dir: models
+
+split:
+  train_ratio: 0.8
+  val_ratio: 0.1
+  test_ratio: 0.1
+
+vocab:
+  min_freq: 5
+  max_len: 35
+
+encoder:
+  type: resnet50
+  feature_dim: 2048
+  freeze: true
+
+decoder:
+  type: lstm
+  embed_dim: 256
+  hidden_dim: 512
+  num_layers: 1
+  dropout: 0.0
+
+training:
+  batch_size: 32
+  epochs: 30
+  lr: 0.001
+  optimizer: adam
+  lr_scheduler_patience: 2
+  lr_scheduler_factor: 0.5
+  early_stop_patience: 5
+  num_workers: 2
+  device: auto
+
+inference:
+  decoding: greedy
+  beam_width: 3
