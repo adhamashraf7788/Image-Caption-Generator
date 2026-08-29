@@ -9,15 +9,17 @@ No other file needs to change.
 from __future__ import annotations
 
 from src.models.base import BaseDecoder, BaseEncoder
-from src.models.decoder import DecoderLSTM
-from src.models.encoder import ResNet50Encoder
+from src.models.decoder import DecoderAttentionLSTM, DecoderLSTM
+from src.models.encoder import ResNet50AttentionEncoder, ResNet50Encoder
 
 ENCODER_REGISTRY: dict[str, type[BaseEncoder]] = {
     "resnet50": ResNet50Encoder,
+    "resnet50_spatial": ResNet50AttentionEncoder,
 }
 
 DECODER_REGISTRY: dict[str, type[BaseDecoder]] = {
     "lstm": DecoderLSTM,
+    "attention_lstm": DecoderAttentionLSTM,
 }
 
 

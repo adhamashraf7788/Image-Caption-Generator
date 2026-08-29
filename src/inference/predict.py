@@ -15,13 +15,13 @@ from PIL import Image
 
 from src.data.preprocessing import get_image_transform
 from src.data.vocabulary import Vocabulary
-from src.features.extractor import ResNet50FeatureExtractor
+from src.features.extractor import ResNet50FeatureExtractor, ResNet50SpatialFeatureExtractor
 from src.models.caption_model import CaptionModel
 
 FEATURE_EXTRACTOR_REGISTRY = {
     "resnet50": ResNet50FeatureExtractor,
+    "resnet50_spatial": ResNet50SpatialFeatureExtractor,
 }
-
 
 class Predictor:
     def __init__(self, checkpoint_path: str | Path, vocab_path: str | Path, device: str = "cpu"):

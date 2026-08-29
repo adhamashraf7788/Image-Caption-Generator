@@ -230,16 +230,58 @@ Notably, **even the regularized run still overfits** — train loss continued fa
 | ROUGE-L | 0.4434 | 0.4527 |
 | METEOR | 0.3480 | 0.3528 |
 
-### Full comparison: all four configurations
+### Experiment 3: Attention-based decoder
+
+Beyond tuning the LSTM baseline, a structurally different decoder was implemented and trained: `DecoderAttentionLSTM` (`configs/resnet_attention_lstm.yaml`), using Bahdanau-style additive attention over a **spatial grid** of ResNet50 features (7×7=49 regions, each 2048-d) rather than one pooled global vector. At every generation step, the decoder computes a fresh, learned weighted combination of image regions based on its current hidden state — directly targeting the "fluent but ungrounded" failure pattern observed in the baseline (see [Evaluation](#evaluation-metrics-and-results)), where captions read naturally but often didn't reflect the image's actual content.
+
+This required a new feature-extraction path (`ResNet50SpatialFeatureExtractor`, dropping ResNet50's average-pooling layer to preserve per-region features), a new encoder (`ResNet50AttentionEncoder`, projecting each region independently), and the new decoder itself — all added purely by writing new classes and registry entries, with **zero changes** to `Trainer`, `evaluate.py`, or `predict.py`, since they only depend on the `BaseEncoder`/`BaseDecoder` interface. This is the direct payoff of the registry-based architecture designed early in the project specifically to support this kind of comparison.
+
+**Training outcome:**
+
+| | Baseline | Regularized | Attention |
+|---|---|---|---|
+| Best epoch | 4 | 10 | 7 |
+| Best val loss | 2.7350 | 2.6672 | **2.6286** |
+
+The attention decoder reached the best validation loss of all three configurations, and reached it in *fewer* epochs than the regularized run — evidence it extracts more useful signal per training step than the plain LSTM decoder, consistent with the architectural motivation (per-step access to spatial image detail, rather than one static vector). Despite this efficiency gain, it still plateaus and begins overfitting (train loss continuing to drop while val loss flattens/creeps upward) at a similar point in training to the other two configurations — discussed below.
+
+**Evaluation results — attention checkpoint, greedy vs. beam:**
+
+| Metric | Attention + Greedy | Attention + Beam-3 |
+|---|---|---|
+| BLEU-1 | 0.5730 | 0.5779 |
+| BLEU-2 | 0.3865 | 0.4016 |
+| BLEU-3 | 0.2536 | 0.2713 |
+| BLEU-4 | 0.1624 | **0.1783** |
+| ROUGE-L | 0.4597 | 0.4721 |
+| METEOR | 0.3736 | 0.3787 |
+
+### Full comparison: all six configurations
 
 | Configuration | BLEU-4 | ROUGE-L | METEOR |
 |---|---|---|---|
 | Baseline + greedy | 0.1221 | 0.4177 | 0.3266 |
 | Baseline + beam-3 | 0.1364 | 0.4265 | 0.3267 |
 | Regularized + greedy | 0.1435 | 0.4434 | 0.3480 |
-| **Regularized + beam-3** | **0.1557** | **0.4527** | **0.3528** |
+| Regularized + beam-3 | 0.1557 | 0.4527 | 0.3528 |
+| Attention + greedy | 0.1624 | 0.4597 | 0.3736 |
+| **Attention + beam-3** | **0.1783** | **0.4721** | **0.3787** |
 
-Both interventions are additive and stack cleanly: regularization alone improved BLEU-4 by ~17% over the baseline (0.1221 → 0.1435), and adding beam search on top of the regularized model improved it a further ~8.5% (0.1435 → 0.1557) — a combined **~27% relative improvement in BLEU-4** over the original baseline, achieved through better training-time regularization and a smarter (but still retraining-free) decoding strategy, without changing the underlying architecture at all.
+The attention decoder is the strongest configuration on every metric, and beam search improves it further just as it did for the LSTM decoder — the two techniques (better architecture, better decoding) are independent and stack cleanly across all three architectures tried. Attention + beam-3 represents a **46% relative improvement in BLEU-4** over the original baseline (0.1221 → 0.1783), achieved through three additive, independently-motivated changes: a smarter decoding strategy (beam search), better training-time regularization, and a fundamentally more expressive decoder architecture (per-step spatial attention instead of one static image vector) — all without changing the dataset, vocabulary, or evaluation methodology.
+
+### Why all three configurations plateau at a similar point: a dataset-size ceiling, not an architecture problem
+
+A consistent pattern across all three trained configurations (baseline, regularized, attention) is that **train loss keeps falling while validation loss plateaus or creeps back up**, regardless of decoder architecture or regularization strength. The attention decoder reaches a *better* plateau, and reaches it *faster*, but it still plateaus — it does not escape the pattern entirely.
+
+This is best understood as a **dataset-size ceiling rather than an architecture-specific weakness**. Flickr8k provides only 6,472 training images (32,360 image-caption pairs) — a small dataset by deep learning standards. Each architecture tried here appears to extract close to the maximum signal available from that fixed amount of data; a better architecture (attention) reaches that ceiling more efficiently (fewer epochs, lower loss) but does not raise the ceiling itself, since the ceiling is set by how much genuinely new information is present in the training set, not by how well any given model can extract it.
+
+Concrete next steps that plausibly *would* raise this ceiling, intentionally not pursued in this project in order to keep the comparison scope manageable, but identified here as the most promising future work:
+
+- **Data augmentation** (random crops, horizontal flips, color jitter on training images) — effectively increases training data diversity without requiring new images, directly targeting the fixed-dataset-size limitation common to all three runs.
+- **Further regularization tuning specific to the attention decoder** — its dropout was set to 0.5 based on the regularized LSTM's success with dropout, but was not itself swept/tuned as an independent hyperparameter.
+- **More and/or more diverse training data** — the most direct fix, but outside this project's scope (would require a larger dataset than Flickr8k, e.g. MS COCO's ~120k images).
+
+These are documented here as identified, well-motivated future work rather than executed experiments, given the project's scope and time constraints — see [Known Limitations & Next Steps](#known-limitations--next-steps) for the consolidated list.
 
 ### Qualitative examples (Input Image → Generated Caption → References)
 
@@ -365,7 +407,7 @@ Then open `http://localhost:8000/docs` — same FastAPI interface, running fully
 - **Frozen ResNet50 + feature caching**, rather than fine-tuning the CNN or running it live every epoch — deliberate speed/simplicity trade-off appropriate for an 8k-image dataset and a first baseline.
 - **Image-as-first-LSTM-token** fusion strategy (vs. using the image to initialize LSTM hidden state) — simpler to implement/debug, standard "Show and Tell" baseline choice.
 - **Greedy decoding** for the initial baseline, rather than beam search — beam search was subsequently implemented and evaluated as a direct comparison (see [Optimization Experiments](#optimization-experiments-beam-search--regularization)), improving BLEU-4 by ~11.7% with no retraining required.
-- **Config + registry architecture** (`src/models/registry.py`) so alternative encoders (e.g. EfficientNet, InceptionV3) or decoders (attention-based LSTM, transformer) can be added without modifying training/evaluation/inference code — built specifically to support architecture comparisons; the ResNet50+LSTM baseline and a regularized variant were both trained via this system in this iteration.
+- **Config + registry architecture** (`src/models/registry.py`) so alternative encoders (e.g. EfficientNet, InceptionV3) or decoders (attention-based LSTM, transformer) can be added without modifying training/evaluation/inference code — built specifically to support architecture comparisons. This paid off directly: the attention-based decoder (`ResNet50AttentionEncoder` + `DecoderAttentionLSTM`) required writing new encoder/decoder classes and two registry entries, with **zero changes** to `Trainer`, `evaluate.py`, or `predict.py`. Three configurations (baseline, regularized, attention) were trained via this system in this iteration.
 - **Split-before-vocab, image-level split** — vocabulary is built only from the training split and images (not individual captions) are the split unit, both specifically to prevent data leakage.
 - **min_freq=5 vocabulary threshold** — reduces vocabulary from Flickr8k's full raw vocabulary down to 2,662 words, trading a small amount of `<unk>` coverage for a more learnable output space.
 - Initially **did not pursue optimization** in the first iteration, in order to get a complete, working, evaluated, and deployed end-to-end system first — beam search and regularization were then added and evaluated as a documented follow-up (see [Optimization Experiments](#optimization-experiments-beam-search--regularization)), directly targeting the overfitting and decoding weaknesses the baseline evaluation surfaced.
@@ -374,7 +416,7 @@ Then open `http://localhost:8000/docs` — same FastAPI interface, running fully
 
 - **Overfitting persists even after regularization** — dropout, weight decay, and gradient clipping delayed and deepened the best validation point (epoch 4 → 10, val_loss 2.735 → 2.667) but did not eliminate the fundamental overfitting dynamic; val loss degraded again even as the LR scheduler reduced the learning rate to 1.25e-4, indicating more epochs alone would not help further. Remaining candidates: stronger dropout, data augmentation, or a fundamentally more data-efficient architecture.
 - Generated captions are fluent but frequently not well-grounded in image-specific detail (see qualitative examples) — primary motivation for trying an **attention-based decoder** next, which lets the model attend to different image regions per generated word instead of relying on one static global vector.
-- Only one architecture family (ResNet50 + LSTM, baseline and regularized variants) has been trained and evaluated so far; the registry-based design supports adding EfficientNet/InceptionV3 encoders and attention/transformer decoders as directly comparable experiments (new config file, no other code changes).
+- Only three decoder architectures (LSTM, regularized LSTM, attention-LSTM) have been trained and evaluated so far, all with a ResNet50 encoder; the registry-based design supports adding EfficientNet/InceptionV3 encoders and a transformer decoder as directly comparable experiments (new config file, no other code changes) — a transformer decoder is the identified next step.
 - Beam search (width 3) is implemented and measurably helps (see above); wider beams, length normalization, or diverse beam search are unexplored follow-ups.
 
 ### Failure case: broken output on a training-set image

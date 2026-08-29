@@ -25,13 +25,13 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 from src.data.preprocessing import get_image_transform, load_image
-from src.features.extractor import ResNet50FeatureExtractor
+from src.features.extractor import ResNet50FeatureExtractor, ResNet50SpatialFeatureExtractor
 from src.utils.config import load_config
 
 EXTRACTOR_REGISTRY = {
     "resnet50": ResNet50FeatureExtractor,
+    "resnet50_spatial": ResNet50SpatialFeatureExtractor,
 }
-
 
 class _ImageOnlyDataset(Dataset):
     """Loads raw images for feature extraction (no captions needed here)."""
