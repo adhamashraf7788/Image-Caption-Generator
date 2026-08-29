@@ -79,7 +79,40 @@ LSTM (hidden_dim=512, 1 layer) → Linear(512 → vocab_size) → word logits at
 | Vocabulary size | 2,662 (incl. `<pad>`, `<start>`, `<end>`, `<unk>`) |
 | Decoding (inference) | Greedy (argmax at each step) |
 
+### Why a Linear projection layer between encoder and decoder
+
+ResNet50's output (after removing its classification head) is a 2048-dimensional feature vector — that dimensionality is just an artifact of ResNet50's architecture, not something meaningful for captioning. The LSTM's word embeddings, meanwhile, are 256-dimensional. Since the LSTM expects every input in its sequence (image step and word steps alike) to have the *same* dimensionality, something has to convert 2048 numbers into 256 numbers.
+
+That's the entire job of the `Linear(2048, 256)` layer in `src/models/encoder.py`: a learned matrix multiplication (`output = W·x + b`) that compresses the ResNet feature into the shared 256-d embedding space. Unlike a fixed resize/reshape, this projection is **trained** — the network learns which combinations of the 2048 ResNet features are most useful for predicting the next word, rather than us hand-designing that compression.
+
+### Why CNN features are cached instead of recomputed
+
+Because the ResNet50 encoder is **frozen** (no gradients ever flow into it), its output for a given image is mathematically identical every single time — running the same image through it twice produces the same 2048-d vector both times. Recomputing that on every training batch, every epoch, would be pure wasted computation.
+
+Instead, `scripts/extract_features.py` runs every image through ResNet50 **once**, up front, and saves the resulting vectors to `data/features/resnet50_features.pt`. Training then does a fast dictionary lookup (`features[image_filename]`) instead of a CNN forward pass — turning what would be a repeated expensive operation into a one-time cost (8,091 images in ~25 seconds on an RTX 3060) followed by near-instant lookups for the rest of training.
+
+### The plug-and-play registry mechanism
+
+`src/models/registry.py` maps a config string (e.g. `"lstm"`, `"resnet50"`) to the actual Python class that implements it:
+```python
+DECODER_REGISTRY = {"lstm": DecoderLSTM}   # more entries added here for future architectures
+```
+`build_decoder(config, vocab_size)` looks up `config["decoder"]["type"]` in this dictionary and instantiates *only* that one class — it does not build or run every registered option. To add a new architecture (e.g. an attention-based decoder), you write one new class implementing the same `BaseDecoder` interface, add one line to this dictionary, and create a new YAML config pointing `decoder.type` at it. Nothing in `train.py`, `Trainer`, `evaluate.py`, or `predict.py` needs to change, since they all call `build_decoder(...)` generically rather than importing a specific class directly. This is what makes architecture comparisons (baseline vs. attention vs. transformer) a matter of adding files, not editing existing ones.
+
 The codebase uses a **registry pattern** (`src/models/registry.py`) so new encoders/decoders (e.g. attention, transformer) can be added by writing one class + one registry entry + one new YAML config — no other code changes. This baseline is `configs/base_resnet_lstm.yaml`.
+
+### Decoding strategy: greedy search
+
+At inference time, the model has no ground-truth caption to guide it — it has to generate one word at a time, feeding each predicted word back in as the input for the next step (autoregressive generation). At every step, the LSTM produces a score for **every word in the vocabulary** (2,662 scores). **Greedy decoding** simply picks whichever single word has the highest score (`argmax`) at that step, commits to it, and moves on — with no ability to reconsider that choice later, even if it leads the sentence into an incoherent dead end.
+
+```python
+logits = self.fc(lstm_out.squeeze(1))              # a score for every word in the vocabulary
+predicted_idx = int(logits.argmax(dim=-1).item())   # take only the single highest-scoring word
+```
+
+This is the simplest possible decoding strategy — easy to implement, debug, and reason about, which is why the baseline uses it. Its main weakness: if two words are scored very closely at some step, greedy always takes the marginally higher one and never looks back, even when the slightly-lower-scoring alternative would have led to a much better overall sentence. This is a likely contributor to the broken output seen in the [out-of-distribution failure case](#failure-case-out-of-distribution-images) below.
+
+**Beam search** (not yet implemented) is the standard alternative: instead of keeping only the single best word at each step, it tracks the top-K most likely *partial sequences* simultaneously, and only commits to a final caption once the whole sequence is scored — allowing a slightly lower-scoring early word choice to still "win" if it leads to a more coherent overall sentence. This requires no retraining, only a different `generate()` implementation, making it a natural low-cost next step.
 
 ## Preprocessing
 
@@ -92,6 +125,8 @@ The codebase uses a **registry pattern** (`src/models/registry.py`) so new encod
 - Lowercase, strip punctuation, collapse whitespace, whitespace-tokenize
 - Wrap with `<start>` / `<end>`
 - Vocabulary built **from the training split only** (avoids leakage), keeping words with frequency ≥ 5; rarer words map to `<unk>`
+**Vocabulary construction and `<unk>` handling:** the vocabulary is built **only from the training split's captions** (never val/test — this avoids leaking information about what words exist in "unseen" data). Words appearing fewer than 5 times (`min_freq=5`) are excluded from the vocabulary and mapped to `<unk>` instead of getting their own index — Flickr8k captions contain many one-off rare words (misspellings, unusual phrasings), and keeping every unique word would bloat the vocabulary with entries the model would see only once or twice, hurting generalization. This threshold reduced the raw vocabulary down to 2,662 words. The trade-off: some genuinely descriptive but rare words become `<unk>` at both training and inference time — a deliberate choice favoring a more learnable, generalizable output space over maximum vocabulary coverage.
+
 - Numericalized and padded/truncated to a fixed max length (35 tokens)
 
 **Feature caching:** since the CNN encoder is frozen, its output for a given image never changes — so every image is run through ResNet50 **once**, and the resulting 2048-d vectors are cached to disk (`data/features/resnet50_features.pt`). Training reads from this cache instead of recomputing CNN features every epoch (8,091 images extracted in ~25 seconds on an RTX 3060).
@@ -104,6 +139,12 @@ The codebase uses a **registry pattern** (`src/models/registry.py`) so new encod
 - **Early stopping:** patience 5 epochs (no val loss improvement)
 - **Checkpointing:** best model (lowest val loss) and last-epoch model both saved every epoch, enabling `--resume`
 - **Teacher forcing:** ground-truth previous word fed at each decoder step during training (not the model's own prediction), allowing the whole sequence to be processed in one parallel forward pass per batch
+
+### Why teacher forcing (and how it differs from inference)
+
+During training, the correct caption is already known, so at each decoder step the model is fed the **true** previous word from the dataset — never its own (possibly wrong) prediction. Concretely, for the true caption `<start> a dog runs <end>`, the model sees `<start>` and must predict `a`; separately, it's shown the true `a` (regardless of what it predicted) and must predict `dog`; and so on. Because every input in the sequence is already known ahead of time, the entire sequence can be processed in **one parallel forward pass** per batch — no step-by-step loop needed during training, which is what makes training fast.
+
+This is fundamentally different from **inference** (see [Decoding strategy](#decoding-strategy-greedy-search) above), where there's no ground-truth caption available — the model must feed its *own* predictions back in as input for the next step, one at a time, in a loop. This means a wrong prediction early in inference can compound into further errors later in the sequence (an effect teacher forcing prevents from happening during training) — a well-known mismatch between training and inference conditions in sequence generation, and part of why generated captions can sometimes diverge from what training loss alone would suggest.
 
 **Actual training run** (RTX 3060, batch size 32):
 
