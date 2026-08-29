@@ -315,15 +315,17 @@ Then open `http://localhost:8000/docs` — same FastAPI interface, running fully
 - Only one architecture (ResNet50 + LSTM) has been trained and evaluated so far; the registry-based design supports adding EfficientNet/InceptionV3 encoders and attention/transformer decoders as directly comparable experiments (new config file, no other code changes).
 - Beam search decoding (vs. current greedy) is implemented as inference-time-only future work.
 
-### Failure case: out-of-distribution images
+### Failure case: broken output on a training-set image
 
-Testing with an image type essentially absent from Flickr8k (a close-up bird perched on a hand) produced a grammatically broken output:
+Testing with a bird-close-up image (`111766423_4522d36e56.jpg`) produced a grammatically broken output:
 
-| Image | Generated |
-|---|---|
-| close-up photo of a chickadee perched on a hand, snowy background | `a bird is its wings in a` |
+| Image | Generated | Reference (from training data) |
+|---|---|---|
+| black-and-white bird eating seeds from a person's hand | `a bird is its wings in a` | "A black and white bird eating seeds out of someone's hand." |
 
-This is a different, more severe failure mode than the "fluent but ungrounded" captions seen on in-distribution test images (see [Evaluation](#evaluation-metrics-and-results)) — the output isn't just inaccurate, it isn't a valid sentence. Two likely contributing causes:
+This image is not out-of-distribution — it is one of the 32,360 training pairs the model was directly trained on (confirmed in `data/processed/train.csv`). That the model still produces an incoherent, ungrammatical sequence on an image it was trained on is a more concerning finding than a failure on genuinely unfamiliar content would be, and points to two compounding issues rather than distribution shift:
 
-1. **Distribution shift** — Flickr8k is overwhelmingly people/dogs/outdoor-scene photography; close-up bird macro shots are essentially unrepresented in training, so the model is extrapolating far outside anything it learned.
-2. **Greedy decoding degeneracy** — with a weak, early-stopped decoder (epoch 4) facing an unfamiliar image embedding, argmax word selection at each step can commit early to a low-confidence path with no ability to recover, producing an incoherent sequence. **Beam search** (retaining multiple candidate sequences instead of committing greedily) is expected to reduce this failure mode without any retraining, since it only changes inference-time decoding — this is a concrete, low-cost candidate for the "next steps" beam search work noted above.
+1. **Underfitting/early stopping** — training was cut short at epoch 4 (see [Training Process](#training-process)) specifically because val loss stopped improving; the model had only partially learned even its own training distribution by that point, and bird/hand close-ups are a comparatively rare image type within Flickr8k, likely undertrained relative to more common scene types (people, dogs, outdoor group photos).
+2. **Greedy decoding degeneracy** — even a well-fit model can produce incoherent sequences under greedy (argmax) decoding if the model's confidence is low or evenly split between competing words at some step, since greedy commits immediately with no ability to reconsider (see [Decoding strategy](#decoding-strategy-greedy-search) above). Given the model *has* seen this image's reference captions during training, decoding-time behavior — not the underlying learned representation alone — is a plausible major contributor to this specific failure.
+
+**Beam search** (tracking multiple candidate sequences instead of committing greedily at each step) is a concrete, no-retraining-required candidate for reducing this class of failure, and remains the most immediate next step identified in this project.
