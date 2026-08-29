@@ -380,7 +380,8 @@ Then open `http://localhost:8000/docs` — same FastAPI interface, running fully
 ### Failure case: broken output on a training-set image
 
 Testing with a bird-close-up image (`111766423_4522d36e56.jpg`) produced a grammatically broken output:
-   ![Bird eating seeds from a hand](docs/failure_case_bird.jpg)
+
+![Black and white bird eating seeds from a hand](docs/failure_case_bird.jpg)
 
 | Image | Generated | Reference (from training data) |
 |---|---|---|
@@ -394,3 +395,13 @@ This image is not out-of-distribution — it is one of the 32,360 training pairs
 **Beam search** (tracking multiple candidate sequences instead of committing greedily at each step) is a concrete, no-retraining-required candidate for reducing this class of failure, and remains the most immediate next step identified in this project.
 
 > **Update:** beam search was subsequently implemented and tested directly on this image (baseline checkpoint): greedy produced `"a bird is its wings in a"`, while beam-3 produced `"a white bird its wings"` — an improvement in grammaticality (the dangling fragment is gone) but still not a fully coherent sentence. This confirms beam search helps but is not sufficient on its own to fully correct a genuinely undertrained region of the model's learned representation — consistent with the broader finding that regularization changes to training (see [Optimization Experiments](#optimization-experiments-beam-search--regularization)) were needed in addition to the decoding-strategy change to meaningfully move overall test-set metrics.
+
+> **Further update — regularized model + beam search:** re-tested the same image with the regularized checkpoint (`configs/resnet_lstm_regularized.yaml`) using beam-3 decoding:
+>
+> | Configuration | Generated caption |
+> |---|---|
+> | Baseline + greedy | `a bird is its wings in a` |
+> | Baseline + beam-3 | `a white bird its wings` |
+> | **Regularized + beam-3** | **`a black and white bird with its mouth open`** |
+>
+> This is now a fully coherent, grammatically correct sentence, and semantically reasonable ("black and white bird" is accurate; "mouth open" is a plausible reading of the bird's open beak, even if the ground-truth references describe it eating seeds from a hand rather than mentioning its mouth). This is a concrete, direct confirmation that the combination of regularization (fixing the underlying representation) and beam search (fixing decoding-time commitment errors) resolves this specific failure case that neither change alone fully fixed — matching the additive improvement pattern seen in the aggregate test-set metrics above.

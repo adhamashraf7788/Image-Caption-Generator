@@ -2,6 +2,7 @@
 
 Usage:
     python -m scripts.push_to_hub --repo-id your-username/image-caption-generator
+    python -m scripts.push_to_hub --repo-id your-username/image-caption-generator --run-dir models/resnet_lstm_regularized --subfolder resnet_lstm_regularized
 
 Prerequisites:
     pip install huggingface_hub
@@ -15,15 +16,17 @@ from pathlib import Path
 from huggingface_hub import HfApi, create_repo
 
 
-def push_to_hub(repo_id: str, run_dir: Path, vocab_path: Path) -> None:
+def push_to_hub(repo_id: str, run_dir: Path, vocab_path: Path, subfolder: str = "") -> None:
     api = HfApi()
     create_repo(repo_id, repo_type="model", exist_ok=True)
 
+    prefix = f"{subfolder}/" if subfolder else ""
     files_to_upload = {
-        run_dir / "best_model.pt": "best_model.pt",
-        run_dir / "config.yaml": "config.yaml",
-        vocab_path: "vocab.json",
+        run_dir / "best_model.pt": f"{prefix}best_model.pt",
+        run_dir / "config.yaml": f"{prefix}config.yaml",
     }
+    if not subfolder:  # vocab.json is shared/identical across runs, only upload once at root
+        files_to_upload[vocab_path] = "vocab.json"
 
     for local_path, repo_path in files_to_upload.items():
         if not local_path.exists():
@@ -42,9 +45,10 @@ def push_to_hub(repo_id: str, run_dir: Path, vocab_path: Path) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--repo-id", required=True, help="e.g. your-username/image-caption-generator")
+    parser.add_argument("--repo-id", required=True)
     parser.add_argument("--run-dir", default="models/base_resnet_lstm")
     parser.add_argument("--vocab-path", default="data/processed/vocab.json")
+    parser.add_argument("--subfolder", default="", help="e.g. 'resnet_lstm_regularized' to avoid overwriting baseline")
     args = parser.parse_args()
 
-    push_to_hub(args.repo_id, Path(args.run_dir), Path(args.vocab_path))
+    push_to_hub(args.repo_id, Path(args.run_dir), Path(args.vocab_path), subfolder=args.subfolder)

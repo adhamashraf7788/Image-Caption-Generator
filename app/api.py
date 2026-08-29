@@ -16,7 +16,8 @@ from pydantic import BaseModel
 
 from src.inference.predict import Predictor
 
-CHECKPOINT_PATH = Path("models/base_resnet_lstm/best_model.pt")
+#can be also CHECKPOINT_PATH = Path("models/base_resnet_lstm/best_model.pt")
+CHECKPOINT_PATH = Path("models/resnet_lstm_regularized/best_model.pt") #change this to which ever arch we choose to use
 VOCAB_PATH = Path("data/processed/vocab.json")
 
 app = FastAPI(title="Image Caption Generator", version="1.0")

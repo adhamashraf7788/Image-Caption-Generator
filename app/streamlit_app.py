@@ -17,7 +17,7 @@ from PIL import Image
 
 from src.inference.predict import Predictor
 
-CHECKPOINT_PATH = Path("models/base_resnet_lstm/best_model.pt")
+CHECKPOINT_PATH = Path("models/resnet_lstm_regularized/best_model.pt")
 VOCAB_PATH = Path("data/processed/vocab.json")
 
 
