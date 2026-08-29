@@ -273,3 +273,16 @@ Then open `http://localhost:8000/docs` — same FastAPI interface, running fully
 - Generated captions are fluent but frequently not well-grounded in image-specific detail (see qualitative examples) — primary motivation for trying an **attention-based decoder** next, which lets the model attend to different image regions per generated word instead of relying on one static global vector.
 - Only one architecture (ResNet50 + LSTM) has been trained and evaluated so far; the registry-based design supports adding EfficientNet/InceptionV3 encoders and attention/transformer decoders as directly comparable experiments (new config file, no other code changes).
 - Beam search decoding (vs. current greedy) is implemented as inference-time-only future work.
+
+### Failure case: out-of-distribution images
+
+Testing with an image type essentially absent from Flickr8k (a close-up bird perched on a hand) produced a grammatically broken output:
+
+| Image | Generated |
+|---|---|
+| close-up photo of a chickadee perched on a hand, snowy background | `a bird is its wings in a` |
+
+This is a different, more severe failure mode than the "fluent but ungrounded" captions seen on in-distribution test images (see [Evaluation](#evaluation-metrics-and-results)) — the output isn't just inaccurate, it isn't a valid sentence. Two likely contributing causes:
+
+1. **Distribution shift** — Flickr8k is overwhelmingly people/dogs/outdoor-scene photography; close-up bird macro shots are essentially unrepresented in training, so the model is extrapolating far outside anything it learned.
+2. **Greedy decoding degeneracy** — with a weak, early-stopped decoder (epoch 4) facing an unfamiliar image embedding, argmax word selection at each step can commit early to a low-confidence path with no ability to recover, producing an incoherent sequence. **Beam search** (retaining multiple candidate sequences instead of committing greedily) is expected to reduce this failure mode without any retraining, since it only changes inference-time decoding — this is a concrete, low-cost candidate for the "next steps" beam search work noted above.
