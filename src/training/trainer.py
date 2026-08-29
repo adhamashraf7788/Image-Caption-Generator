@@ -29,8 +29,12 @@ class Trainer:
         self.device = device
 
         train_cfg = config["training"]
-        self.criterion = nn.CrossEntropyLoss(ignore_index=0)
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=train_cfg["lr"])
+        self.criterion = nn.CrossEntropyLoss(ignore_index=0)  # ignore <pad>
+        self.optimizer = torch.optim.Adam(
+            self.model.parameters(),
+            lr=train_cfg["lr"],
+            weight_decay=train_cfg.get("weight_decay", 0.0),
+        )
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer,
             mode="min",
@@ -72,6 +76,9 @@ class Trainer:
 
                 if train:
                     loss.backward()
+                    grad_clip = self.config["training"].get("grad_clip_norm", 0.0)
+                    if grad_clip > 0:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), grad_clip)
                     self.optimizer.step()
 
                 total_loss += loss.item()

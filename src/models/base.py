@@ -33,6 +33,7 @@ class BaseDecoder(nn.Module, ABC):
         """
         raise NotImplementedError
 
+    #for greedy search
     @abstractmethod
     def generate(
         self,
@@ -46,3 +47,20 @@ class BaseDecoder(nn.Module, ABC):
         Returns a list of generated token indices, excluding <start> and <end>.
         """
         raise NotImplementedError
+    
+    #for beam search
+    def generate_beam(
+        self,
+        image_embed: torch.Tensor,
+        start_idx: int,
+        end_idx: int,
+        max_len: int,
+        beam_width: int = 3,
+    ) -> list[int]:
+        """Beam search generation for a SINGLE image (batch=1).
+
+        Optional: not marked @abstractmethod so existing decoders that only
+        implement greedy generate() remain valid; override in subclasses
+        that support beam search (see DecoderLSTM).
+        """
+        raise NotImplementedError("This decoder does not implement beam search.")

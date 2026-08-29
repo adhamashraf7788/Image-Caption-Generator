@@ -39,3 +39,20 @@ class CaptionModel(nn.Module):
         self.eval()
         image_embed = self.encoder(image_features)
         return self.decoder.generate(image_embed, start_idx, end_idx, max_len)
+    
+    #for beam search
+    @torch.no_grad()
+    def generate(
+        self,
+        image_features: torch.Tensor,
+        start_idx: int,
+        end_idx: int,
+        max_len: int,
+        decoding: str = "greedy",
+        beam_width: int = 3,
+    ) -> list[int]:
+        self.eval()
+        image_embed = self.encoder(image_features)
+        if decoding == "beam":
+            return self.decoder.generate_beam(image_embed, start_idx, end_idx, max_len, beam_width)
+        return self.decoder.generate(image_embed, start_idx, end_idx, max_len)

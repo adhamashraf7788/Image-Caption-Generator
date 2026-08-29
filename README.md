@@ -179,6 +179,68 @@ Evaluated on the held-out **test set** (810 unique images, 4,050 reference capti
 
 BLEU-4 (the most commonly reported single figure for image captioning) of **0.12** is a working, honest baseline — somewhat below well-tuned literature baselines for this architecture family on Flickr8k (which often reach ~0.15–0.20 with more epochs, dropout tuning, and/or beam search), consistent with this being an intentionally minimal first baseline.
 
+## Optimization Experiments: Beam Search & Regularization
+
+After establishing the baseline, two follow-up experiments were run to directly address the overfitting and decoding weaknesses identified above — both evaluated on the same held-out test set for direct comparison.
+
+### Experiment 1: Beam search decoding (no retraining)
+
+Since the baseline's training was already complete, beam search (beam width 3) was tested purely as an **inference-time change** against the existing baseline checkpoint — no retraining required. Implementation: `DecoderLSTM.generate_beam()` keeps the top-3 candidate partial sequences at each decoding step (instead of committing to a single highest-scoring word, as greedy decoding does), only finalizing a caption once whole-sequence scores are compared.
+
+| Metric | Greedy | Beam-3 | Change |
+|---|---|---|---|
+| BLEU-1 | 0.5127 | 0.5240 | +0.0113 |
+| BLEU-2 | 0.3265 | 0.3362 | +0.0097 |
+| BLEU-3 | 0.2008 | 0.2136 | +0.0128 |
+| BLEU-4 | 0.1221 | 0.1364 | **+0.0143 (+11.7%)** |
+| ROUGE-L | 0.4177 | 0.4265 | +0.0088 |
+| METEOR | 0.3266 | 0.3267 | ~flat |
+
+Beam search improved every metric except METEOR (essentially unchanged), confirming the hypothesis that greedy decoding's single-best-word-at-each-step commitment was leaving quality on the table — at the cost of ~1.7x slower inference (24s vs 14s over 810 test images), since multiple candidate sequences are tracked and scored per image instead of one.
+
+### Experiment 2: Regularized retrain
+
+A second training run (`configs/resnet_lstm_regularized.yaml`) added several regularization techniques directly targeting the overfitting pattern observed in the baseline (train loss dropping while val loss climbed, starting epoch 4):
+
+| Change | Baseline | Regularized |
+|---|---|---|
+| LSTM output dropout | 0.0 (unused — `nn.LSTM`'s `dropout` arg has no effect with `num_layers=1`) | 0.3 (applied explicitly to LSTM output before final projection) |
+| Weight decay (L2) | 0.0 | 1e-5 |
+| Gradient clipping | none | max norm 5.0 |
+| Early stop patience | 5 epochs | 8 epochs |
+
+**Training outcome:** the regularized run trained for 18 epochs before early stopping (vs. 9 for the baseline), and reached a lower best validation loss:
+
+| | Baseline | Regularized |
+|---|---|---|
+| Best epoch | 4 | 10 |
+| Best val loss | 2.7350 | **2.6672** |
+| Total epochs before stopping | 9 | 18 |
+
+Notably, **even the regularized run still overfits** — train loss continued falling (2.19 → 1.71 from epoch 9 to 18) while val loss crept back up despite the LR scheduler repeatedly halving the learning rate (5e-4 → 1.25e-4). Regularization measurably delayed and deepened the best point, but did not eliminate the underlying overfitting dynamic — running for more epochs would not have helped further, since val loss was already degrading even at very small LR.
+
+**Evaluation results — regularized checkpoint, greedy vs. beam:**
+
+| Metric | Regularized + Greedy | Regularized + Beam-3 |
+|---|---|---|
+| BLEU-1 | 0.5444 | 0.5517 |
+| BLEU-2 | 0.3580 | 0.3662 |
+| BLEU-3 | 0.2277 | 0.2387 |
+| BLEU-4 | 0.1435 | **0.1557** |
+| ROUGE-L | 0.4434 | 0.4527 |
+| METEOR | 0.3480 | 0.3528 |
+
+### Full comparison: all four configurations
+
+| Configuration | BLEU-4 | ROUGE-L | METEOR |
+|---|---|---|---|
+| Baseline + greedy | 0.1221 | 0.4177 | 0.3266 |
+| Baseline + beam-3 | 0.1364 | 0.4265 | 0.3267 |
+| Regularized + greedy | 0.1435 | 0.4434 | 0.3480 |
+| **Regularized + beam-3** | **0.1557** | **0.4527** | **0.3528** |
+
+Both interventions are additive and stack cleanly: regularization alone improved BLEU-4 by ~17% over the baseline (0.1221 → 0.1435), and adding beam search on top of the regularized model improved it a further ~8.5% (0.1435 → 0.1557) — a combined **~27% relative improvement in BLEU-4** over the original baseline, achieved through better training-time regularization and a smarter (but still retraining-free) decoding strategy, without changing the underlying architecture at all.
+
 ### Qualitative examples (Input Image → Generated Caption → References)
 
 | Image | Generated | References |
@@ -302,22 +364,23 @@ Then open `http://localhost:8000/docs` — same FastAPI interface, running fully
 
 - **Frozen ResNet50 + feature caching**, rather than fine-tuning the CNN or running it live every epoch — deliberate speed/simplicity trade-off appropriate for an 8k-image dataset and a first baseline.
 - **Image-as-first-LSTM-token** fusion strategy (vs. using the image to initialize LSTM hidden state) — simpler to implement/debug, standard "Show and Tell" baseline choice.
-- **Greedy decoding** for this baseline, rather than beam search — beam search is a planned inference-time-only comparison (no retraining needed) for a later iteration.
-- **Config + registry architecture** (`src/models/registry.py`) so alternative encoders (e.g. EfficientNet, InceptionV3) or decoders (attention-based LSTM, transformer) can be added without modifying training/evaluation/inference code — built specifically to support architecture comparisons, though only the ResNet50+LSTM baseline was trained in this iteration.
+- **Greedy decoding** for the initial baseline, rather than beam search — beam search was subsequently implemented and evaluated as a direct comparison (see [Optimization Experiments](#optimization-experiments-beam-search--regularization)), improving BLEU-4 by ~11.7% with no retraining required.
+- **Config + registry architecture** (`src/models/registry.py`) so alternative encoders (e.g. EfficientNet, InceptionV3) or decoders (attention-based LSTM, transformer) can be added without modifying training/evaluation/inference code — built specifically to support architecture comparisons; the ResNet50+LSTM baseline and a regularized variant were both trained via this system in this iteration.
 - **Split-before-vocab, image-level split** — vocabulary is built only from the training split and images (not individual captions) are the split unit, both specifically to prevent data leakage.
 - **min_freq=5 vocabulary threshold** — reduces vocabulary from Flickr8k's full raw vocabulary down to 2,662 words, trading a small amount of `<unk>` coverage for a more learnable output space.
-- Deliberately **did not pursue further optimization** in this iteration (e.g. dropout tuning, more epochs with regularization, data augmentation, unfreezing ResNet layers) in order to get a complete, working, evaluated, and deployed end-to-end system first — per the project's own stated priority on software engineering practice and full pipeline completion over squeezing out maximum accuracy from a single architecture.
+- Initially **did not pursue optimization** in the first iteration, in order to get a complete, working, evaluated, and deployed end-to-end system first — beam search and regularization were then added and evaluated as a documented follow-up (see [Optimization Experiments](#optimization-experiments-beam-search--regularization)), directly targeting the overfitting and decoding weaknesses the baseline evaluation surfaced.
 
 ## Known Limitations & Next Steps
 
-- Baseline overfits after ~4 epochs; val loss does not improve further despite LR scheduling — candidates: dropout tuning, more training data via augmentation, or simply more regularization.
+- **Overfitting persists even after regularization** — dropout, weight decay, and gradient clipping delayed and deepened the best validation point (epoch 4 → 10, val_loss 2.735 → 2.667) but did not eliminate the fundamental overfitting dynamic; val loss degraded again even as the LR scheduler reduced the learning rate to 1.25e-4, indicating more epochs alone would not help further. Remaining candidates: stronger dropout, data augmentation, or a fundamentally more data-efficient architecture.
 - Generated captions are fluent but frequently not well-grounded in image-specific detail (see qualitative examples) — primary motivation for trying an **attention-based decoder** next, which lets the model attend to different image regions per generated word instead of relying on one static global vector.
-- Only one architecture (ResNet50 + LSTM) has been trained and evaluated so far; the registry-based design supports adding EfficientNet/InceptionV3 encoders and attention/transformer decoders as directly comparable experiments (new config file, no other code changes).
-- Beam search decoding (vs. current greedy) is implemented as inference-time-only future work.
+- Only one architecture family (ResNet50 + LSTM, baseline and regularized variants) has been trained and evaluated so far; the registry-based design supports adding EfficientNet/InceptionV3 encoders and attention/transformer decoders as directly comparable experiments (new config file, no other code changes).
+- Beam search (width 3) is implemented and measurably helps (see above); wider beams, length normalization, or diverse beam search are unexplored follow-ups.
 
 ### Failure case: broken output on a training-set image
 
 Testing with a bird-close-up image (`111766423_4522d36e56.jpg`) produced a grammatically broken output:
+   ![Bird eating seeds from a hand](docs/failure_case_bird.jpg)
 
 | Image | Generated | Reference (from training data) |
 |---|---|---|
@@ -329,3 +392,5 @@ This image is not out-of-distribution — it is one of the 32,360 training pairs
 2. **Greedy decoding degeneracy** — even a well-fit model can produce incoherent sequences under greedy (argmax) decoding if the model's confidence is low or evenly split between competing words at some step, since greedy commits immediately with no ability to reconsider (see [Decoding strategy](#decoding-strategy-greedy-search) above). Given the model *has* seen this image's reference captions during training, decoding-time behavior — not the underlying learned representation alone — is a plausible major contributor to this specific failure.
 
 **Beam search** (tracking multiple candidate sequences instead of committing greedily at each step) is a concrete, no-retraining-required candidate for reducing this class of failure, and remains the most immediate next step identified in this project.
+
+> **Update:** beam search was subsequently implemented and tested directly on this image (baseline checkpoint): greedy produced `"a bird is its wings in a"`, while beam-3 produced `"a white bird its wings"` — an improvement in grammaticality (the dangling fragment is gone) but still not a fully coherent sentence. This confirms beam search helps but is not sufficient on its own to fully correct a genuinely undertrained region of the model's learned representation — consistent with the broader finding that regularization changes to training (see [Optimization Experiments](#optimization-experiments-beam-search--regularization)) were needed in addition to the decoding-strategy change to meaningfully move overall test-set metrics.

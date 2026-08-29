@@ -41,13 +41,19 @@ class Predictor:
         self.feature_extractor = FEATURE_EXTRACTOR_REGISTRY[encoder_type](device=device)
         self.transform = get_image_transform(train=False)
         self.max_len = self.config["vocab"]["max_len"]
-    def predict(self, image: str | Path | Image.Image) -> str:
-        """Generate a caption for a single image (path or already-loaded PIL Image)."""
+        self.decoding = self.config.get("inference", {}).get("decoding", "greedy")
+        self.beam_width = self.config.get("inference", {}).get("beam_width", 3)
+
+    def predict(self, image: str | Path | Image.Image, decoding: str | None = None) -> str:
+        """Generate a caption for a single image (path or already-loaded PIL Image).
+
+        `decoding` overrides the config's default ("greedy" or "beam") for this call.
+        """
         if isinstance(image, (str, Path)):
             image = Image.open(image).convert("RGB")
 
-        image_tensor = self.transform(image).unsqueeze(0)  # (1, 3, 224, 224)
-        image_feature = self.feature_extractor.extract(image_tensor)  # (1, feature_dim)
+        image_tensor = self.transform(image).unsqueeze(0)
+        image_feature = self.feature_extractor.extract(image_tensor)
         image_feature = image_feature.to(self.device)
 
         generated_ids = self.model.generate(
@@ -55,6 +61,8 @@ class Predictor:
             start_idx=self.vocab.start_idx,
             end_idx=self.vocab.end_idx,
             max_len=self.max_len,
+            decoding=decoding or self.decoding,
+            beam_width=self.beam_width,
         )
         words = self.vocab.decode(generated_ids, strip_special=True)
         return " ".join(words)

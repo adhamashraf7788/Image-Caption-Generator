@@ -48,6 +48,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "epochs": 30,
         "lr": 1e-3,
         "optimizer": "adam",
+        "weight_decay": 0.0,
+        "grad_clip_norm": 0.0,
         "lr_scheduler_patience": 2,
         "lr_scheduler_factor": 0.5,
         "early_stop_patience": 5,

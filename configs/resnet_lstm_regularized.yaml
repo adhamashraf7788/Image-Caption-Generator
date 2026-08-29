@@ -1,0 +1,48 @@
+run_name: resnet_lstm_regularized
+
+seed: 42
+
+paths:
+  raw_images_dir: data/raw/images
+  captions_file: data/raw/captions.txt
+  processed_dir: data/processed
+  features_dir: data/features
+  models_dir: models
+
+split:
+  train_ratio: 0.8
+  val_ratio: 0.1
+  test_ratio: 0.1
+
+vocab:
+  min_freq: 5
+  max_len: 35
+
+encoder:
+  type: resnet50
+  feature_dim: 2048
+  freeze: true
+
+decoder:
+  type: lstm
+  embed_dim: 256
+  hidden_dim: 512
+  num_layers: 1
+  dropout: 0.3
+
+training:
+  batch_size: 32
+  epochs: 40
+  lr: 0.001
+  optimizer: adam
+  weight_decay: 1.0e-5
+  grad_clip_norm: 5.0
+  lr_scheduler_patience: 2
+  lr_scheduler_factor: 0.5
+  early_stop_patience: 8
+  num_workers: 2
+  device: auto
+
+inference:
+  decoding: beam
+  beam_width: 3
